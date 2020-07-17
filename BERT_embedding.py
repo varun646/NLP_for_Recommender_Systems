@@ -1,6 +1,6 @@
 import torch
 import pandas as pd
-from transformers import BertTokenizer, BertModel, BertForPreTraining, BertConfig
+from transformers import BertTokenizer, BertForPreTraining, BertConfig
 
 # Load pre-trained model tokenizer
 tokenizer = BertTokenizer.from_pretrained('./uncased_L-4_H-256_A-4/')
@@ -19,11 +19,6 @@ for review in reviews_json['reviewText']:
     if not (pd.isna(review)):
         marked_reviews.append(CLS_TOKEN + review + SEP_TOKEN)
 
-# Define a new example sentence with multiple meanings of the word "bank"
-text = "After stealing money from the bank vault, the bank robber was seen " \
-       "fishing on the Mississippi river bank."
-
-
 def generate_review_embedding(model, tokenizer, marked_review):
     # Split the sentence into tokens.
     tokenized_text = tokenizer.tokenize(marked_review)
@@ -31,14 +26,8 @@ def generate_review_embedding(model, tokenizer, marked_review):
     # Map the token strings to their vocabulary indeces.
     indexed_tokens = tokenizer.convert_tokens_to_ids(tokenized_text)
 
-    # Display the words with their indeces.
-    for tup in zip(tokenized_text, indexed_tokens):
-        print('{:<12} {:>6,}'.format(tup[0], tup[1]))
-
-    # Mark each of the 22 tokens as belonging to sentence "1".
+    # Mark each of the tokens as belonging to sentence "1".
     segments_ids = [1] * len(tokenized_text)
-
-    print(segments_ids)
 
     # Convert inputs to PyTorch tensors
     tokens_tensor = torch.tensor([indexed_tokens])
@@ -55,17 +44,6 @@ def generate_review_embedding(model, tokenizer, marked_review):
         # hidden states from all layers. See the documentation for more details:
         # https://huggingface.co/transformers/model_doc/bert.html#bertmodel
         hidden_states = outputs[2]
-
-    print("Number of layers:", len(hidden_states), "  (initial embeddings + 12 BERT layers)")
-    layer_i = 0
-
-    print("Number of batches:", len(hidden_states[layer_i]))
-    batch_i = 0
-
-    print("Number of tokens:", len(hidden_states[layer_i][batch_i]))
-    token_i = 0
-
-    print("Number of hidden units:", len(hidden_states[layer_i][batch_i][token_i]))
 
     # Concatenate the tensors for all layers. We use `stack` here to
     # create a new dimension in the tensor.
@@ -87,8 +65,6 @@ def generate_review_embedding(model, tokenizer, marked_review):
     token_embeddings.size()
 
     torch.Size([22, 13, 768])
-
-    # `hidden_states` has shape [13 x 1 x 22 x 768]
 
     # `token_vecs` is a tensor with shape [22 x 768]
     token_vecs = hidden_states[-2][0]
