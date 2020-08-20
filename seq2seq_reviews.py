@@ -11,44 +11,6 @@ import torch.optim as optim
 import torchtext
 from torchtext.data import Field, BucketIterator
 
-SOS_TOKEN = '<sos>'
-EOS_TOKEN = '<eos>'
-
-reviews_json = pd.read_json('AMAZON_FASHION_5.json', lines= True)
-df1 = []
-csv_list = [["Source", "Target"]]
-
-embeddings = []
-
-SRC_REVIEWS = Field(sequential= True, tokenize= lambda text: nltk.word_tokenize(text), init_token= SOS_TOKEN,
-                    eos_token= EOS_TOKEN, lower= True)
-TRG_REVIEWS = Field(sequential= True, tokenize= lambda text: nltk.word_tokenize(text), init_token= SOS_TOKEN,
-                    eos_token= EOS_TOKEN, lower= True)
-
-for review in reviews_json['reviewText']:
-    if not (pd.isna(review)):
-        csv_list.append([review, review])
-        review = nltk.word_tokenize(review)
-        df1.append(review)
-
-with open('updated_csv.csv', 'w', newline='') as file:
-    writer = csv.writer(file)
-    writer.writerows(csv_list)
-
-tt_data = torchtext.data.TabularDataset('updated_csv.csv', format="csv", fields=[('Source', SRC_REVIEWS),
-                                                                                 ('Target', TRG_REVIEWS)])
-
-
-SRC_REVIEWS.build_vocab(df1, min_freq=2)
-TRG_REVIEWS.build_vocab(df1, min_freq=2)
-
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-train_iter, valid_iter, test_iter = BucketIterator.splits((tt_data, tt_data, tt_data), batch_size=128,
-                                                          device=device, sort_key= lambda ex: len(ex.Source))
-
-
-
 class Encoder(nn.Module):
     def __init__(self, input_dim, emb_dim, hid_dim, n_layers, dropout):
         super().__init__()
@@ -73,6 +35,7 @@ class Encoder(nn.Module):
         # cell = [n_layers * n_direction, batch_size, hid_dim]
 
         return hidden, cell
+
 
 
 class Decoder(nn.Module):
@@ -140,7 +103,7 @@ class Seq2Seq(nn.Module):
 
         # last hidden state of the encoder is used as the initial hidden state of the decoder
         hidden, cell = self.encoder(src)
-        embeddings.append(hidden)
+        # embeddings.append(hidden)
 
         # first input to the decoder is the <sos> token.
         input = trg[0, :]
@@ -166,140 +129,186 @@ class Seq2Seq(nn.Module):
         emb, cell = self.encoder(src)
         return emb
 
-#initialize model
-INPUT_DIM = len(SRC_REVIEWS.vocab)
-OUTPUT_DIM = len(TRG_REVIEWS.vocab)
-ENC_EMB_DIM = 256
-DEC_EMB_DIM = 256
-HID_DIM = 512
-N_LAYERS = 2
-ENC_DROPOUT = 0.5
-DEC_DROPOUT = 0.5
-
-encoder = Encoder(INPUT_DIM, ENC_EMB_DIM, HID_DIM, N_LAYERS, ENC_DROPOUT)
-decoder = Decoder(OUTPUT_DIM, DEC_EMB_DIM, HID_DIM, N_LAYERS, DEC_DROPOUT)
-
-model = Seq2Seq(encoder, decoder, device).to(device)
+    def get_config(self):
+        config = {'batch_size': 128,
+                  'optimizer': 'adam',
+                  'lr': 1e-2,
+                  'latent_dim': self.encoder.hid_dim,
+                  'nlayers': self.encoder.n_layers,
+                  'layers': [self.encoder.input_dim, self.encoder.hid_dim, self.encoder.emb_dim, self.decoder.hid_dim,
+                             self.decoder.output_dim],
+                  # layers[0] is the concat of latent user vector & latent item vector
+                  'use_cuda': False}  # CHANGE THIS}
+        return config
 
 
-def init_weights(m):
-    for name, param in m.named_parameters():
-        nn.init.uniform_(param.data, -0.08, 0.08)
+class Seq2SeqEmbeddingGenerator():
+    def __init__(self, review_json_file):
 
+        SOS_TOKEN = '<sos>'
+        EOS_TOKEN = '<eos>'
 
-model.apply(init_weights)
+        reviews_json = pd.read_json(review_json_file, lines=True)
+        df1 = []
+        csv_list = [["Source", "Target"]]
 
-def count_parameters(model):
-    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+        self.embeddings = []
 
-print(f'The model has {count_parameters(model):,} trainable parameters')
+        self.SRC_REVIEWS = Field(sequential=True, tokenize=lambda text: nltk.word_tokenize(text), init_token=SOS_TOKEN,
+                                 eos_token=EOS_TOKEN, lower=True)
+        self.TRG_REVIEWS = Field(sequential=True, tokenize=lambda text: nltk.word_tokenize(text), init_token=SOS_TOKEN,
+                                 eos_token=EOS_TOKEN, lower=True)
 
+        for review in reviews_json['reviewText']:
+            if not (pd.isna(review)):
+                csv_list.append([review, review])
+                review = nltk.word_tokenize(review)
+                df1.append(review)
 
-optimizer = optim.Adam(model.parameters())
-TRG_PAD_IDX = TRG_REVIEWS.vocab.stoi[TRG_REVIEWS.pad_token]
-criterion = nn.CrossEntropyLoss(ignore_index=TRG_PAD_IDX)
+        with open('updated_csv.csv', 'w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerows(csv_list)
 
+        tt_data = torchtext.data.TabularDataset('updated_csv.csv', format="csv", fields=[('Source', self.SRC_REVIEWS),
+                                                                                         ('Target', self.TRG_REVIEWS)])
 
-def train(model, iterator, optimizer, criterion, clip):
-    model.train()
+        self.SRC_REVIEWS.build_vocab(df1, min_freq=2)
+        self.TRG_REVIEWS.build_vocab(df1, min_freq=2)
 
-    epoch_loss = 0
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    for batch in iterator:
-        # print(batch)
-        src = batch.Source
-        trg = batch.Target
-        # print(src)
+        self.train_iter, self.valid_iter, self.test_iter = BucketIterator.splits((tt_data, tt_data, tt_data),
+                                                                                 batch_size=128,
+                                                                                 device=self.device,
+                                                                                 sort_key=lambda ex: len(ex.Source))
 
-        optimizer.zero_grad()
-        # trg = [sen_len, batch_size]
-        # output = [trg_len, batch_size, output_dim]
-        output = model(src, trg)
-        output_dim = output.shape[-1]
+        # initialize model
+        INPUT_DIM = len(self.SRC_REVIEWS.vocab)
+        OUTPUT_DIM = len(self.TRG_REVIEWS.vocab)
+        ENC_EMB_DIM = 256
+        DEC_EMB_DIM = 256
+        HID_DIM = 512
+        N_LAYERS = 2
+        ENC_DROPOUT = 0.5
+        DEC_DROPOUT = 0.5
 
-        # transfrom our output : slice off the first column, and flatten the output into 2 dim.
-        output = output[1:].view(-1, output_dim)
-        trg = trg[1:].view(-1)
-        # trg = [(trg_len-1) * batch_size]
-        # output = [(trg_len-1) * batch_size, output_dim]
+        encoder = Encoder(INPUT_DIM, ENC_EMB_DIM, HID_DIM, N_LAYERS, ENC_DROPOUT)
+        decoder = Decoder(OUTPUT_DIM, DEC_EMB_DIM, HID_DIM, N_LAYERS, DEC_DROPOUT)
 
-        loss = criterion(output, trg)
+        self.model = Seq2Seq(encoder, decoder, self.device).to(self.device)
 
-        loss.backward()
+    def init_weights(m):
+        for name, param in m.named_parameters():
+            nn.init.uniform_(param.data, -0.08, 0.08)
 
-        torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
+    def count_parameters(model):
+        return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-        optimizer.step()
+    def train(model, iterator, optimizer, criterion, clip):
+        model.train()
 
-        epoch_loss += loss.item()
+        epoch_loss = 0
 
-    return epoch_loss / len(iterator)
-
-
-def evaluate(model, iterator, criterion):
-    model.eval()
-
-    epoch_loss = 0
-
-    with torch.no_grad():
-        for i, batch in enumerate(iterator):
+        for batch in iterator:
+            # print(batch)
             src = batch.Source
             trg = batch.Target
+            # print(src)
 
-            output = model(src, trg, 0)  # turn off teacher forcing.
-
+            optimizer.zero_grad()
             # trg = [sen_len, batch_size]
-            # output = [sen_len, batch_size, output_dim]
+            # output = [trg_len, batch_size, output_dim]
+            output = model(src, trg)
             output_dim = output.shape[-1]
 
+            # transfrom our output : slice off the first column, and flatten the output into 2 dim.
             output = output[1:].view(-1, output_dim)
             trg = trg[1:].view(-1)
+            # trg = [(trg_len-1) * batch_size]
+            # output = [(trg_len-1) * batch_size, output_dim]
 
             loss = criterion(output, trg)
 
+            loss.backward()
+
+            torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
+
+            optimizer.step()
+
             epoch_loss += loss.item()
 
-    return epoch_loss / len(iterator)
+        return epoch_loss / len(iterator)
 
+    def evaluate(model, iterator, criterion):
+        model.eval()
 
-# a function that used to tell us how long an epoch takes.
-def epoch_time(start_time, end_time):
-    elapsed_time = end_time - start_time
-    elapsed_mins = int(elapsed_time / 60)
-    elapsed_secs = int(elapsed_time - (elapsed_mins * 60))
-    return elapsed_mins, elapsed_secs
+        epoch_loss = 0
 
+        with torch.no_grad():
+            for i, batch in enumerate(iterator):
+                src = batch.Source
+                trg = batch.Target
 
-N_EPOCHS = 10
+                output = model(src, trg, 0)  # turn off teacher forcing.
 
-CLIP = 1
+                # trg = [sen_len, batch_size]
+                # output = [sen_len, batch_size, output_dim]
+                output_dim = output.shape[-1]
 
-best_valid_loss = float('inf')
+                output = output[1:].view(-1, output_dim)
+                trg = trg[1:].view(-1)
 
-for epoch in range(N_EPOCHS):
+                loss = criterion(output, trg)
 
-    start_time = time.time()
+                epoch_loss += loss.item()
 
-    train_loss = train(model, train_iter, optimizer, criterion= criterion, clip= CLIP)
-    valid_loss = evaluate(model, valid_iter, criterion)
+        return epoch_loss / len(iterator)
 
-    end_time = time.time()
-    epoch_mins, epoch_secs = epoch_time(start_time, end_time)
+    # a function that used to tell us how long an epoch takes.
+    def epoch_time(start_time, end_time):
+        elapsed_time = end_time - start_time
+        elapsed_mins = int(elapsed_time / 60)
+        elapsed_secs = int(elapsed_time - (elapsed_mins * 60))
+        return elapsed_mins, elapsed_secs
 
-    if valid_loss < best_valid_loss:
-        best_valid_loss = valid_loss
-        torch.save(model.state_dict(), 'Seq2SeqModel.pt')
-    print(f"Epoch: {epoch+1:02} | Time {epoch_mins}m {epoch_secs}s")
-    print(f"\tTrain Loss: {train_loss:.3f}")
-    print(f"\tValid Loss: {valid_loss:.3f}")
+    def get_embeddings(model, iter):
+        embs = []
+        for batch in model.train_iter:
+            embs.append(model.embedding(batch.Source))
 
+        return embs
 
-def embeddings(model, iter):
-    embs = []
-    for batch in train_iter:
-        embs.append(model.embedding(batch.Source))
+    def embeddings(self):
 
-    return embs
+        self.model.apply(self.init_weights)
 
+        print(f'The model has {count_parameters(model):,} trainable parameters')
 
-embeddings(train_iter, model)
+        optimizer = optim.Adam(self.model.parameters())
+        TRG_PAD_IDX = self.TRG_REVIEWS.vocab.stoi[self.TRG_REVIEWS.pad_token]
+        criterion = nn.CrossEntropyLoss(ignore_index=TRG_PAD_IDX)
+
+        N_EPOCHS = 10
+
+        CLIP = 1
+
+        best_valid_loss = float('inf')
+
+        for epoch in range(N_EPOCHS):
+
+            start_time = time.time()
+
+            train_loss = self.train(self.model, self.train_iter, optimizer, criterion=criterion, clip=CLIP)
+            valid_loss = self.evaluate(self.model, self.valid_iter, criterion)
+
+            end_time = time.time()
+            epoch_mins, epoch_secs = self.epoch_time(start_time, end_time)
+
+            if valid_loss < best_valid_loss:
+                best_valid_loss = valid_loss
+                torch.save(self.model.state_dict(), 'Seq2SeqModel.pt')
+            print(f"Epoch: {epoch+1:02} | Time {epoch_mins}m {epoch_secs}s")
+            print(f"\tTrain Loss: {train_loss:.3f}")
+            print(f"\tValid Loss: {valid_loss:.3f}")
+
+        return self.get_embeddings(self.model, self.train_iter)

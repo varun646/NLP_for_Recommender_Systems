@@ -1,93 +1,96 @@
+# USED http://mccormickml.com/2019/05/14/BERT-word-embeddings-tutorial/#1-loading-pre-trained-bert FOR CODE
 import torch
 import pandas as pd
 from transformers import BertTokenizer, BertForPreTraining, BertConfig
 
-# Load pre-trained model tokenizer
-tokenizer = BertTokenizer.from_pretrained('./uncased_L-4_H-256_A-4/')
 
-# store reviews from json
-reviews_json = pd.read_json('AMAZON_FASHION_5.json', lines=True)
+class BertEmbeddingGenerator():
+    def __init__(self, review_json_file):
+        # store reviews from json
+        self.reviews_json = pd.read_json(review_json_file, lines=True)
+        # Load pre-trained model tokenizer
+        self.tokenizer = BertTokenizer.from_pretrained('./uncased_L-4_H-256_A-4/')
 
-# token for beginning of sentence
-CLS_TOKEN = "[CLS] "
+    def get_marked_reviews(self):
+        # token for beginning of sentence
+        CLS_TOKEN = "[CLS] "
 
-# token for separating/ending sentences
-SEP_TOKEN = " [SEP]"
+        # token for separating/ending sentences
+        SEP_TOKEN = " [SEP]"
 
-marked_reviews = []
-for review in reviews_json['reviewText']:
-    if not (pd.isna(review)):
-        marked_reviews.append(CLS_TOKEN + review + SEP_TOKEN)
+        marked_reviews = []
+        for review in self.reviews_json['reviewText']:
+            if not (pd.isna(review)):
+                marked_reviews.append(CLS_TOKEN + review + SEP_TOKEN)
 
-def generate_review_embedding(model, tokenizer, marked_review):
-    # Split the sentence into tokens.
-    tokenized_text = tokenizer.tokenize(marked_review)
+        return marked_reviews
 
-    # Map the token strings to their vocabulary indeces.
-    indexed_tokens = tokenizer.convert_tokens_to_ids(tokenized_text)
+    def generate_review_embedding(model, tokenizer, marked_review):
+        # Split the sentence into tokens.
+        tokenized_text = tokenizer.tokenize(marked_review)
 
-    # Mark each of the tokens as belonging to sentence "1".
-    segments_ids = [1] * len(tokenized_text)
+        # Map the token strings to their vocabulary indeces.
+        indexed_tokens = tokenizer.convert_tokens_to_ids(tokenized_text)
 
-    # Convert inputs to PyTorch tensors
-    tokens_tensor = torch.tensor([indexed_tokens])
-    segments_tensors = torch.tensor([segments_ids])
+        # Mark each of the tokens as belonging to sentence "1".
+        segments_ids = [1] * len(tokenized_text)
 
-    # Run the text through BERT, and collect all of the hidden states produced
-    # from all 12 layers.
-    with torch.no_grad():
-        outputs = model(tokens_tensor, segments_tensors)
+        # Convert inputs to PyTorch tensors
+        tokens_tensor = torch.tensor([indexed_tokens])
+        segments_tensors = torch.tensor([segments_ids])
 
-        # Evaluating the model will return a different number of objects based on
-        # how it's  configured in the `from_pretrained` call earlier. In this case,
-        # becase we set `output_hidden_states = True`, the third item will be the
-        # hidden states from all layers. See the documentation for more details:
-        # https://huggingface.co/transformers/model_doc/bert.html#bertmodel
-        hidden_states = outputs[2]
+        # Run the text through BERT, and collect all of the hidden states produced
+        # from all 12 layers.
+        with torch.no_grad():
+            outputs = model(tokens_tensor, segments_tensors)
 
-    # Concatenate the tensors for all layers. We use `stack` here to
-    # create a new dimension in the tensor.
-    token_embeddings = torch.stack(hidden_states, dim=0)
+            # Evaluating the model will return a different number of objects based on
+            # how it's  configured in the `from_pretrained` call earlier. In this case,
+            # becase we set `output_hidden_states = True`, the third item will be the
+            # hidden states from all layers. See the documentation for more details:
+            # https://huggingface.co/transformers/model_doc/bert.html#bertmodel
+            hidden_states = outputs[2]
 
-    token_embeddings.size()
+        # Concatenate the tensors for all layers. We use `stack` here to
+        # create a new dimension in the tensor.
+        token_embeddings = torch.stack(hidden_states, dim=0)
 
-    torch.Size([13, 1, 22, 768])
+        token_embeddings.size()
 
-    # Remove dimension 1, the "batches".
-    token_embeddings = torch.squeeze(token_embeddings, dim=1)
+        torch.Size([13, 1, 22, 768])
 
-    token_embeddings.size()
-    torch.Size([13, 22, 768])
+        # Remove dimension 1, the "batches".
+        token_embeddings = torch.squeeze(token_embeddings, dim=1)
 
-    # Swap dimensions 0 and 1.
-    token_embeddings = token_embeddings.permute(1, 0, 2)
+        token_embeddings.size()
+        torch.Size([13, 22, 768])
 
-    token_embeddings.size()
+        # Swap dimensions 0 and 1.
+        token_embeddings = token_embeddings.permute(1, 0, 2)
 
-    torch.Size([22, 13, 768])
+        token_embeddings.size()
 
-    # `token_vecs` is a tensor with shape [22 x 768]
-    token_vecs = hidden_states[-2][0]
+        torch.Size([22, 13, 768])
 
-    # Calculate the average of all 22 token vectors.
-    sentence_embedding = torch.mean(token_vecs, dim=0)
+        # `token_vecs` is a tensor with shape [22 x 768]
+        token_vecs = hidden_states[-2][0]
 
-    return sentence_embedding
+        # Calculate the average of all 22 token vectors.
+        sentence_embedding = torch.mean(token_vecs, dim=0)
 
+        return sentence_embedding
 
-# Load pre-trained model (weights)
-config = BertConfig.from_json_file('./uncased_L-4_H-256_A-4/bert_config.json')
-config.output_hidden_states = True
-model = BertForPreTraining.from_pretrained('./uncased_L-4_H-256_A-4/bert_model.ckpt.index', from_tf=True, config=config)
+    def embeddings(self):
+        # Load pre-trained model (weights)
+        config = BertConfig.from_json_file('./uncased_L-4_H-256_A-4/bert_config.json')
+        config.output_hidden_states = True
+        model = BertForPreTraining.from_pretrained('./uncased_L-4_H-256_A-4/bert_model.ckpt.index', from_tf=True,
+                                                   config=config)
 
-# Put the model in "evaluation" mode, meaning feed-forward operation.
-model.eval()
-
-review_embeddings = []
-
-for review in marked_reviews:
-    embedding = generate_review_embedding(model, tokenizer, review)
-    review_embeddings.append(embedding)
-
-print("done :)")
-print(review_embeddings[0])
+        # Put the model in "evaluation" mode, meaning feed-forward operation.
+        model.eval()
+        review_embeddings = []
+        for review in self.get_marked_reviews():
+            embedding = self.generate_review_embedding(model, self.tokenizer, review)
+            review_embeddings.append(embedding)
+        return review_embeddings
